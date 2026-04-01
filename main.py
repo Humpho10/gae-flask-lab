@@ -4,6 +4,7 @@ from pathlib import Path
 import logging
 import os
 import sqlite3
+from urllib.parse import urlparse
 from threading import Lock
 from typing import Any
 
@@ -28,27 +29,58 @@ app.logger.setLevel(logging.INFO)
 
 DB_LOCK = Lock()
 DB_READY = False
+DB_ERROR: str | None = None
+FORCE_SQLITE_FALLBACK = False
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def _normalize_database_url() -> str:
-    database_url = app.config["DATABASE_URL"]
+def _candidate_database_urls() -> list[str]:
+    if FORCE_SQLITE_FALLBACK:
+        return []
+
+    candidates = [
+        os.environ.get("DATABASE_PUBLIC_URL", ""),
+        os.environ.get("DATABASE_URL", ""),
+        os.environ.get("POSTGRES_PUBLIC_URL", ""),
+        os.environ.get("POSTGRES_URL", ""),
+        os.environ.get("PGURL", ""),
+        app.config["DATABASE_URL"],
+    ]
+    normalized: list[str] = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if candidate.startswith("postgres://"):
+            candidate = "postgresql://" + candidate[len("postgres://") :]
+        if candidate not in normalized:
+            normalized.append(candidate)
+    return normalized
+
+
+def _normalize_database_url(database_url: str) -> str:
     if database_url.startswith("postgres://"):
         return "postgresql://" + database_url[len("postgres://") :]
     return database_url
 
 
 def _database_backend() -> str:
-    database_url = _normalize_database_url()
+    database_url = _resolve_database_url()
     return "postgresql" if database_url.startswith("postgresql://") else "sqlite"
+
+
+def _resolve_database_url() -> str:
+    urls = _candidate_database_urls()
+    if urls:
+        return _normalize_database_url(urls[0])
+    return f"sqlite:///{BASE_DIR / 'tasks.db'}"
 
 
 def _open_database_connection() -> tuple[str, Any]:
     backend = _database_backend()
-    database_url = _normalize_database_url()
+    database_url = _resolve_database_url()
 
     if backend == "postgresql":
         if psycopg2 is None:
@@ -80,6 +112,8 @@ def _initialize_database() -> None:
     """
 
     global DB_READY
+    global DB_ERROR
+    global FORCE_SQLITE_FALLBACK
 
     with DB_LOCK:
         if DB_READY:
@@ -106,6 +140,7 @@ def _initialize_database() -> None:
                         cursor.execute(schema_sql)
                     connection.commit()
                     DB_READY = True
+                    DB_ERROR = None
                     return
                 finally:
                     connection.close()
@@ -114,7 +149,11 @@ def _initialize_database() -> None:
                 app.logger.warning("Database init attempt %s failed: %s", attempt + 1, exc)
                 time.sleep(2)
 
-        raise RuntimeError(f"Database initialization failed after retries: {last_error}")
+        DB_READY = True
+        DB_ERROR = f"Database initialization failed after retries: {last_error}"
+        FORCE_SQLITE_FALLBACK = True
+        app.logger.warning(DB_ERROR)
+        return
 
 
 def _safe_fetch_tasks() -> list[dict[str, Any]]:
@@ -166,6 +205,7 @@ def _database_flags() -> dict[str, object]:
         "database_configured": bool(os.environ.get("DATABASE_URL")),
         "secret_key_loaded": bool(os.environ.get("FLASK_SECRET_KEY")),
         "database_backend": _database_backend(),
+        "database_error": DB_ERROR,
     }
 
 
