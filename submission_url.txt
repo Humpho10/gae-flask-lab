@@ -1,0 +1,7 @@
+Google App Engine Deployment URL
+
+Paste your deployed application URL below:
+https://<your-project-id>.uc.r.appspot.com
+
+Optional: Add date/time of deployment:
+

@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cloud Task Tracker | Flask + GAE</title>
+    <style>
+      :root {
+        --bg: #f8fafc;
+        --surface: #ffffff;
+        --text: #0f172a;
+        --muted: #334155;
+        --accent: #0369a1;
+        --accent-2: #0284c7;
+        --danger: #b91c1c;
+        --line: #dbeafe;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background:
+          radial-gradient(circle at 0% 0%, #dbeafe 0%, transparent 35%),
+          radial-gradient(circle at 100% 100%, #cffafe 0%, transparent 38%),
+          var(--bg);
+        color: var(--text);
+      }
+      .wrap {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        width: min(860px, 100%);
+        background: var(--surface);
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        box-shadow: 0 12px 30px rgba(2, 6, 23, 0.08);
+        padding: 28px;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(1.5rem, 2.1vw, 2rem);
+      }
+      p {
+        margin: 8px 0;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+      .meta {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+        margin: 18px 0 22px;
+      }
+      .pill {
+        background: #f0f9ff;
+        border: 1px solid #bae6fd;
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 0.95rem;
+      }
+      .label {
+        color: #075985;
+        font-weight: 600;
+      }
+      form.add {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      input[type="text"] {
+        flex: 1 1 250px;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 0.95rem;
+      }
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn-primary {
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        color: #fff;
+      }
+      .task-list {
+        list-style: none;
+        margin: 16px 0 0;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+      .task-item {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 10px 12px;
+      }
+      .task-title {
+        font-weight: 600;
+      }
+      .task-title.done {
+        text-decoration: line-through;
+        color: #64748b;
+      }
+      .task-time {
+        font-size: 0.8rem;
+        color: #64748b;
+        margin-top: 2px;
+      }
+      .btn-muted {
+        background: #f1f5f9;
+        color: #0f172a;
+      }
+      .btn-danger {
+        background: #fee2e2;
+        color: var(--danger);
+      }
+      .inline {
+        display: inline;
+      }
+      code {
+        background: #f1f5f9;
+        padding: 2px 7px;
+        border-radius: 6px;
+      }
+      .ok {
+        margin-top: 16px;
+        color: var(--accent);
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="card">
+        <h1>Cloud Task Tracker</h1>
+        <p>
+          This app runs on Flask and is ready for Google App Engine deployment.
+        </p>
+
+        <div class="meta">
+          <div class="pill">
+            <span class="label">Server time:</span> {{ current_time }}
+          </div>
+          <div class="pill">
+            <span class="label">Your visits:</span> {{ visits }}
+          </div>
+          <div class="pill">
+            <span class="label">Tasks:</span> {{ total_tasks }}
+          </div>
+          <div class="pill">
+            <span class="label">Completed:</span> {{ completed_tasks }}
+          </div>
+        </div>
+
+        <form class="add" method="post" action="/tasks">
+          <input
+            type="text"
+            name="title"
+            maxlength="120"
+            placeholder="Enter a task, e.g. Finish cloud lab report"
+            required
+          />
+          <button class="btn-primary" type="submit">Add Task</button>
+        </form>
+
+        {% if tasks %}
+        <ul class="task-list">
+          {% for task in tasks %}
+          <li class="task-item">
+            <div>
+              <div class="task-title {% if task.done %}done{% endif %}">
+                {{ task.title }}
+              </div>
+              <div class="task-time">Created: {{ task.created_at }}</div>
+            </div>
+            <form
+              class="inline"
+              method="post"
+              action="/tasks/{{ task.id }}/toggle"
+            >
+              <button class="btn-muted" type="submit">
+                {% if task.done %}Mark Pending{% else %}Mark Done{% endif %}
+              </button>
+            </form>
+            <form
+              class="inline"
+              method="post"
+              action="/tasks/{{ task.id }}/delete"
+            >
+              <button class="btn-danger" type="submit">Delete</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p>No tasks yet. Add one using the form above.</p>
+        {% endif %}
+
+        <p class="ok">
+          API endpoints: <code>/health</code> and <code>/api/stats</code>
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
