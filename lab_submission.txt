@@ -1,0 +1,12 @@
+Follow-Up Lab Submission: Exploring PaaS as a Component of Cloud Computing
+
+Student: Humphrey Junior
+Date: 2026-04-01
+Platform Used: Render (PaaS)
+
+Deployed Web Application URL:
+https://gae-flask-lab.onrender.com/
+
+Notes:
+- The application was developed using Flask.
+- The application was deployed to a PaaS provider and tested successfully.

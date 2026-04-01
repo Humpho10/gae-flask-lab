@@ -1,7 +1,7 @@
-Google App Engine Deployment URL
+Web Application Deployment URL
 
-Paste your deployed application URL below:
-https://<your-project-id>.uc.r.appspot.com
+Platform: Render
+Application URL: https://gae-flask-lab.onrender.com/
 
-Optional: Add date/time of deployment:
+Deployment date: 2026-04-01
 

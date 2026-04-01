@@ -159,6 +159,13 @@
           </div>
           <div class="pill">
             <span class="label">Completed:</span> {{ completed_tasks }}
+            <div class="pill">
+              <span class="label">Database:</span> {{ database_backend }}
+            </div>
+            <div class="pill">
+              <span class="label">Env vars loaded:</span>
+              {{ "Yes" if database_configured else "No" }}
+            </div>
           </div>
         </div>
 
@@ -207,7 +214,8 @@
         {% endif %}
 
         <p class="ok">
-          API endpoints: <code>/health</code> and <code>/api/stats</code>
+          API endpoints: <code>/health</code>, <code>/api/stats</code>,
+          <code>/config</code>, and <code>/debug/raise</code>
         </p>
       </section>
     </main>
