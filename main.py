@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import time
 from pathlib import Path
 import logging
 import os
@@ -26,6 +27,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 app.logger.setLevel(logging.INFO)
 
 DB_LOCK = Lock()
+DB_READY = False
 
 
 def utc_now() -> str:
@@ -51,7 +53,13 @@ def _open_database_connection() -> tuple[str, Any]:
     if backend == "postgresql":
         if psycopg2 is None:
             raise RuntimeError("psycopg2-binary is not installed")
-        connection = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
+        connect_kwargs: dict[str, Any] = {
+            "cursor_factory": RealDictCursor,
+            "connect_timeout": 5,
+        }
+        if "sslmode=" not in database_url:
+            connect_kwargs["sslmode"] = "require"
+        connection = psycopg2.connect(database_url, **connect_kwargs)
         return backend, connection
 
     sqlite_path = database_url.replace("sqlite:///", "", 1)
@@ -71,26 +79,51 @@ def _initialize_database() -> None:
     )
     """
 
+    global DB_READY
+
     with DB_LOCK:
-        backend, connection = _open_database_connection()
-        try:
-            cursor = connection.cursor()
-            if backend == "postgresql":
-                cursor.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS tasks (
-                        id SERIAL PRIMARY KEY,
-                        title TEXT NOT NULL,
-                        done BOOLEAN NOT NULL DEFAULT FALSE,
-                        created_at TEXT NOT NULL
-                    )
-                    """
-                )
-            else:
-                cursor.execute(schema_sql)
-            connection.commit()
-        finally:
-            connection.close()
+        if DB_READY:
+            return
+
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                backend, connection = _open_database_connection()
+                try:
+                    cursor = connection.cursor()
+                    if backend == "postgresql":
+                        cursor.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS tasks (
+                                id SERIAL PRIMARY KEY,
+                                title TEXT NOT NULL,
+                                done BOOLEAN NOT NULL DEFAULT FALSE,
+                                created_at TEXT NOT NULL
+                            )
+                            """
+                        )
+                    else:
+                        cursor.execute(schema_sql)
+                    connection.commit()
+                    DB_READY = True
+                    return
+                finally:
+                    connection.close()
+            except Exception as exc:  # pragma: no cover - deployment startup protection
+                last_error = exc
+                app.logger.warning("Database init attempt %s failed: %s", attempt + 1, exc)
+                time.sleep(2)
+
+        raise RuntimeError(f"Database initialization failed after retries: {last_error}")
+
+
+def _safe_fetch_tasks() -> list[dict[str, Any]]:
+    try:
+        _initialize_database()
+        return _fetch_tasks()
+    except Exception as exc:
+        app.logger.exception("Failed to fetch tasks: %s", exc)
+        return []
 
 
 def _fetch_tasks() -> list[dict[str, Any]]:
@@ -139,8 +172,13 @@ def _database_flags() -> dict[str, object]:
 @app.get("/")
 def home() -> str:
     session["visits"] = int(session.get("visits", 0)) + 1
-    tasks = _fetch_tasks()
-    total, completed = task_counts()
+    try:
+        _initialize_database()
+    except Exception as exc:
+        app.logger.exception("Database startup error on home(): %s", exc)
+    tasks = _safe_fetch_tasks()
+    total = len(tasks)
+    completed = sum(1 for task in tasks if task["done"])
     return render_template(
         "index.html",
         current_time=utc_now(),
@@ -160,22 +198,26 @@ def add_task():
         return redirect(url_for("home"))
 
     with DB_LOCK:
-        backend, connection = _open_database_connection()
         try:
-            cursor = connection.cursor()
-            if backend == "postgresql":
-                cursor.execute(
-                    "INSERT INTO tasks (title, done, created_at) VALUES (%s, %s, %s)",
-                    (title, False, utc_now()),
-                )
-            else:
-                cursor.execute(
-                    "INSERT INTO tasks (title, done, created_at) VALUES (?, ?, ?)",
-                    (title, 0, utc_now()),
-                )
-            connection.commit()
-        finally:
-            connection.close()
+            _initialize_database()
+            backend, connection = _open_database_connection()
+            try:
+                cursor = connection.cursor()
+                if backend == "postgresql":
+                    cursor.execute(
+                        "INSERT INTO tasks (title, done, created_at) VALUES (%s, %s, %s)",
+                        (title, False, utc_now()),
+                    )
+                else:
+                    cursor.execute(
+                        "INSERT INTO tasks (title, done, created_at) VALUES (?, ?, ?)",
+                        (title, 0, utc_now()),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+        except Exception as exc:
+            app.logger.exception("Failed to add task: %s", exc)
 
     return redirect(url_for("home"))
 
@@ -183,21 +225,25 @@ def add_task():
 @app.post("/tasks/<int:task_id>/toggle")
 def toggle_task(task_id: int):
     with DB_LOCK:
-        backend, connection = _open_database_connection()
         try:
-            cursor = connection.cursor()
-            cursor.execute("SELECT done FROM tasks WHERE id = %s" if backend == "postgresql" else "SELECT done FROM tasks WHERE id = ?", (task_id,))
-            row = cursor.fetchone()
-            if row is not None:
-                current_done = bool(row["done"] if backend == "postgresql" else row[0])
-                new_done = not current_done
-                cursor.execute(
-                    "UPDATE tasks SET done = %s WHERE id = %s" if backend == "postgresql" else "UPDATE tasks SET done = ? WHERE id = ?",
-                    (new_done, task_id) if backend == "postgresql" else (1 if new_done else 0, task_id),
-                )
-                connection.commit()
-        finally:
-            connection.close()
+            _initialize_database()
+            backend, connection = _open_database_connection()
+            try:
+                cursor = connection.cursor()
+                cursor.execute("SELECT done FROM tasks WHERE id = %s" if backend == "postgresql" else "SELECT done FROM tasks WHERE id = ?", (task_id,))
+                row = cursor.fetchone()
+                if row is not None:
+                    current_done = bool(row["done"] if backend == "postgresql" else row[0])
+                    new_done = not current_done
+                    cursor.execute(
+                        "UPDATE tasks SET done = %s WHERE id = %s" if backend == "postgresql" else "UPDATE tasks SET done = ? WHERE id = ?",
+                        (new_done, task_id) if backend == "postgresql" else (1 if new_done else 0, task_id),
+                    )
+                    connection.commit()
+            finally:
+                connection.close()
+        except Exception as exc:
+            app.logger.exception("Failed to toggle task %s: %s", task_id, exc)
 
     return redirect(url_for("home"))
 
@@ -205,23 +251,29 @@ def toggle_task(task_id: int):
 @app.post("/tasks/<int:task_id>/delete")
 def delete_task(task_id: int):
     with DB_LOCK:
-        backend, connection = _open_database_connection()
         try:
-            cursor = connection.cursor()
-            cursor.execute(
-                "DELETE FROM tasks WHERE id = %s" if backend == "postgresql" else "DELETE FROM tasks WHERE id = ?",
-                (task_id,),
-            )
-            connection.commit()
-        finally:
-            connection.close()
+            _initialize_database()
+            backend, connection = _open_database_connection()
+            try:
+                cursor = connection.cursor()
+                cursor.execute(
+                    "DELETE FROM tasks WHERE id = %s" if backend == "postgresql" else "DELETE FROM tasks WHERE id = ?",
+                    (task_id,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+        except Exception as exc:
+            app.logger.exception("Failed to delete task %s: %s", task_id, exc)
 
     return redirect(url_for("home"))
 
 
 @app.get("/api/stats")
 def api_stats() -> tuple[dict[str, object], int]:
-    total, completed = task_counts()
+    tasks = _safe_fetch_tasks()
+    total = len(tasks)
+    completed = sum(1 for task in tasks if task["done"])
     payload = {
         "server_time": utc_now(),
         "visits": int(session.get("visits", 0)),
@@ -251,8 +303,4 @@ def health() -> tuple[dict[str, str], int]:
 
 if __name__ == "__main__":
     # Local development server
-    _initialize_database()
     app.run(host="127.0.0.1", port=8080, debug=True)
-
-
-_initialize_database()
