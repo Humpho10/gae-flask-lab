@@ -5,7 +5,7 @@ import logging
 import os
 import sqlite3
 from urllib.parse import urlparse
-from threading import Lock
+from threading import RLock
 from typing import Any
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
@@ -27,7 +27,8 @@ app.config["DATABASE_URL"] = os.environ.get("DATABASE_URL", f"sqlite:///{BASE_DI
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 app.logger.setLevel(logging.INFO)
 
-DB_LOCK = Lock()
+# Re-entrant lock prevents deadlock when route handlers call _initialize_database().
+DB_LOCK = RLock()
 DB_READY = False
 DB_ERROR: str | None = None
 FORCE_SQLITE_FALLBACK = False
